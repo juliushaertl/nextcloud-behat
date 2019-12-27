@@ -1,0 +1,28 @@
+{
+    "name": "juliushaertl/nextcloud-behat",
+    "description": "Behat context helpers for Nextcloud integration tests",
+    "type": "library",
+    "require": {
+        "phpunit/phpunit": "8.0",
+        "behat/behat": "^3.5",
+        "guzzlehttp/guzzle": "^6.5"
+    },
+    "license": "AGPL-3.0-or-later",
+    "autoload": {
+        "psr-4": {
+            "JuliusHaertl\\NextcloudBehat\\": [
+                "src"
+            ],
+            "JuliusHaertl\\NextcloudBehat\\Test\\": [
+                "tests"
+            ]
+        }
+    },
+    "authors": [
+        {
+            "name": "Julius Härtl",
+            "email": "jus@bitgrid.net"
+        }
+    ]
+}
+

@@ -55,6 +55,7 @@ class ServerContext implements Context {
 		$this->servers = $servers;
 		$this->baseUrl = $servers['default'];
 		$this->cookieJar = new CookieJar();
+		$this->setCurrentUser('admin');
 	}
 
 	/**
@@ -108,26 +109,16 @@ class ServerContext implements Context {
 	 * @param string $user
 	 */
 	public function assureUserExists($user) {
-		try {
-			$this->userExists($user);
-		} catch (\GuzzleHttp\Exception\ClientException $ex) {
+		$this->userExists($user);
+		if ($this->response->getStatusCode() !== 200) {
 			$this->createUser($user);
 			$this->setUserDisplayName($user);
 		}
-		$this->response = $this->userExists($user);
-		$this->assertHttpStatusCode(200);
 		$this->createdUsers[$user] = true;
 	}
 
 	private function userExists($user) {
-		$client = new Client();
-		$options = [
-			'auth' => ['admin', 'admin'],
-			'headers' => [
-				'OCS-APIREQUEST' => 'true',
-			],
-		];
-		return $client->get($this->getBaseUrl() . 'ocs/v2.php/cloud/users/' . $user, $options);
+		$this->sendOCSRequest('GET', '/cloud/users/' . $user);
 	}
 
 	private function createUser($user) {
@@ -160,7 +151,7 @@ class ServerContext implements Context {
 			return;
 		}
 
-		$loginUrl = $this->getBaseUrl() . '/index.php/login';
+		$loginUrl = $this->getBaseUrl() . 'index.php/login';
 		// Request a new session and extract CSRF token
 		$client = new Client();
 		$response = $client->get(
@@ -246,7 +237,7 @@ class ServerContext implements Context {
 		try {
 			$this->response = $client->request(
 				$method,
-				rtrim($this->getBaseUrl(), '/') . '/ocs/v2.php/' . ltrim($url, '/'),
+				$this->getBaseUrl() . 'ocs/v2.php/' . ltrim($url, '/'),
 				array_merge([
 					'json' => $data,
 					'headers' => [

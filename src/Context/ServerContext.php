@@ -44,6 +44,8 @@ class ServerContext implements Context {
 	private $currentUser;
 	private $currentUserPassword;
 
+	private $createdUsers = [];
+
 	private $response;
 
 	private $cookieJar;
@@ -53,6 +55,24 @@ class ServerContext implements Context {
 		$this->servers = $servers;
 		$this->baseUrl = $servers['default'];
 		$this->cookieJar = new CookieJar();
+	}
+
+	/**
+	 * @AfterScenario
+	 */
+	public function tearDown() {
+		foreach ($this->createdUsers as $uid => $state) {
+			$this->deleteUser($uid);
+		}
+	}
+
+	private function deleteUser($user) {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('DELETE', '/cloud/users/' . $user);
+		$this->setCurrentUser($currentUser);
+		unset($this->createdUsers[$user]);
+		return $this->response;
 	}
 
 	/**
@@ -73,7 +93,6 @@ class ServerContext implements Context {
 	public function setCurrentUser($user) {
 		$this->currentUser = $user;
 		$this->currentUserPassword = $user === 'admin' ? 'admin' : self::TEST_PASSWORD;
-		$this->usingWebAsUser($user);
 	}
 
 	public function getBaseUrl(): string {
@@ -97,6 +116,7 @@ class ServerContext implements Context {
 		}
 		$this->response = $this->userExists($user);
 		$this->assertHttpStatusCode(200);
+		$this->createdUsers[$user] = true;
 	}
 
 	private function userExists($user) {

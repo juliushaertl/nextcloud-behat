@@ -37,6 +37,9 @@ use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
 class ServerContext implements Context {
+
+	const TEST_PASSWORD = '123456';
+
 	private $servers;
 	private $baseUrl;
 	private $currentUser;
@@ -66,7 +69,7 @@ class ServerContext implements Context {
 	 */
 	public function setCurrentUser($user) {
 		$this->currentUser = $user;
-		$this->currentUserPassword = $user === 'admin' ? 'admin' : $user;
+		$this->currentUserPassword = $user === 'admin' ? 'admin' : self::TEST_PASSWORD;
 		$this->usingWebAsUser($user);
 	}
 
@@ -90,7 +93,7 @@ class ServerContext implements Context {
 			$this->setUserDisplayName($user);
 		}
 		$this->response = $this->userExists($user);
-		$this->theHTTPStatusCodeShouldBe(200);
+		$this->assertHttpStatusCode(200);
 	}
 
 	private function userExists($user) {
@@ -105,6 +108,20 @@ class ServerContext implements Context {
 	}
 
 	private function createUser($user) {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('POST', '/cloud/users', [
+			'userid' => $user,
+			'password' => self::TEST_PASSWORD,
+		]);
+		$this->assertHttpStatusCode(200, 'Failed to create user');
+
+		//Quick hack to login once with the current user
+		$this->setCurrentUser($user);
+		$this->sendOCSRequest('GET', '/cloud/users' . '/' . $user);
+		$this->assertHttpStatusCode($this->response, 200, 'Failed to do first login');
+
+		$this->setCurrentUser($currentUser);
 	}
 
 	private function setUserDisplayName($user) {
@@ -247,8 +264,8 @@ class ServerContext implements Context {
 	 * @Then /^the HTTP status code should be "([^"]*)"$/
 	 * @param int $statusCode
 	 */
-	public function theHTTPStatusCodeShouldBe($statusCode) {
-		Assert::assertEquals($statusCode, $this->response->getStatusCode());
+	public function assertHttpStatusCode($statusCode, $message = '') {
+		Assert::assertEquals($statusCode, $this->response->getStatusCode(), $message);
 	}
 
 	/**

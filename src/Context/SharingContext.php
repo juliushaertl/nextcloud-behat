@@ -91,13 +91,13 @@ class SharingContext implements Context {
 	public function acceptLastPendingShare($user) {
 		$this->serverContext->setCurrentUser($user);
 		$this->serverContext->sendOCSRequest('GET', "/apps/files_sharing/api/v1/remote_shares/pending", null);
-		$this->serverContext->theHTTPStatusCodeShouldBe(200);
+		$this->serverContext->assertHttpStatusCode(200);
 		$this->serverContext->theOCSStatusCodeShouldBe(200);
 		$response = $this->serverContext->getOCSResponseData();
 		Assert::assertNotEmpty($response, 'No pending share found');
 		$share_id = $response[0]['id'];
 		$this->serverContext->sendOCSRequest('POST', "/apps/files_sharing/api/v1/remote_shares/pending/{$share_id}", null);
-		$this->serverContext->theHTTPStatusCodeShouldBe(200);
+		$this->serverContext->assertHttpStatusCode(200);
 		$this->serverContext->theOCSStatusCodeShouldBe(200);
 	}
 }

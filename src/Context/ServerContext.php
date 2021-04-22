@@ -37,6 +37,7 @@ use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
 class ServerContext implements Context {
+	public const TEST_ADMIN_PASSWORD = 'password';
 	public const TEST_PASSWORD = '123456';
 
 	private $servers;
@@ -93,7 +94,7 @@ class ServerContext implements Context {
 	 */
 	public function setCurrentUser($user) {
 		$this->currentUser = $user;
-		$this->currentUserPassword = $user === 'admin' ? 'admin' : self::TEST_PASSWORD;
+		$this->currentUserPassword = $user === 'admin' ? self::TEST_ADMIN_PASSWORD : self::TEST_PASSWORD;
 	}
 
 	public function getBaseUrl(): string {
@@ -150,6 +151,7 @@ class ServerContext implements Context {
 		if ($user === null) {
 			return;
 		}
+		$this->setCurrentUser($user);
 
 		$loginUrl = $this->getBaseUrl() . 'index.php/login';
 		// Request a new session and extract CSRF token
@@ -167,14 +169,13 @@ class ServerContext implements Context {
 		}
 
 		// Login and extract new token
-		$password = ($user === 'admin') ? 'admin' : $this->currentUserPassword;
 		$client = new Client();
 		$response = $client->post(
 			$loginUrl,
 			[
 				'form_params' => [
-					'user' => $user,
-					'password' => $password,
+					'user' => $this->currentUser,
+					'password' => $this->currentUserPassword,
 					'requesttoken' => $this->requestToken,
 				],
 				'cookies' => $this->cookieJar,

@@ -63,6 +63,10 @@ class ServerContext implements Context {
 		$this->baseUrl = $this->servers[$arg1];
 	}
 
+	public function getServer($server) {
+		return $this->servers[$server];
+	}
+
 	/**
 	 * @Given /^as user "([^"]*)"$/
 	 * @param string $user

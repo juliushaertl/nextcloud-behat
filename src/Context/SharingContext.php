@@ -59,6 +59,7 @@ class SharingContext implements Context {
 		}
 
 		$this->serverContext->sendOCSRequest('POST', "/apps/files_sharing/api/v1/shares", $fd);
+		$this->serverContext->assertHttpStatusCode(200, 'Failed to create the share: ' . PHP_EOL . json_encode($this->serverContext->getOCSResponse()));
 
 		$this->lastShareData = $this->serverContext->getOCSResponseData();
 	}
@@ -75,6 +76,7 @@ class SharingContext implements Context {
 		}
 
 		$this->serverContext->sendOCSRequest('PUT', "/apps/files_sharing/api/v1/shares/${share_id}", $fd);
+		$this->serverContext->assertHttpStatusCode(200, 'Failed to update the share: ' . PHP_EOL . json_encode($this->serverContext->getOCSResponse()));
 
 		$this->lastShareData = $this->serverContext->getOCSResponseData();
 	}

@@ -37,8 +37,7 @@ use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
 class ServerContext implements Context {
-
-	const TEST_PASSWORD = '123456';
+	public const TEST_PASSWORD = '123456';
 
 	private $servers;
 	private $baseUrl;
@@ -108,7 +107,7 @@ class ServerContext implements Context {
 				'OCS-APIREQUEST' => 'true',
 			],
 		];
-		return $client->get($this->baseUrl . 'ocs/v2.php/cloud/users/' . $user, $options);
+		return $client->get($this->getBaseUrl() . 'ocs/v2.php/cloud/users/' . $user, $options);
 	}
 
 	private function createUser($user) {
@@ -123,7 +122,7 @@ class ServerContext implements Context {
 		//Quick hack to login once with the current user
 		$this->setCurrentUser($user);
 		$this->sendOCSRequest('GET', '/cloud/users' . '/' . $user);
-		$this->assertHttpStatusCode($this->response, 200, 'Failed to do first login');
+		$this->assertHttpStatusCode(200, 'Failed to do first login');
 
 		$this->setCurrentUser($currentUser);
 	}
@@ -137,6 +136,9 @@ class ServerContext implements Context {
 	 */
 	public function usingWebAsUser($user = null) {
 		$this->cookieJar = new CookieJar();
+		if ($user === null) {
+			return;
+		}
 
 		$loginUrl = $this->getBaseUrl() . '/index.php/login';
 		// Request a new session and extract CSRF token
@@ -226,13 +228,12 @@ class ServerContext implements Context {
 				$method,
 				rtrim($this->getBaseUrl(), '/') . '/ocs/v2.php/' . ltrim($url, '/'),
 				array_merge([
-					'cookies' => $this->getCookieJar(),
 					'json' => $data,
 					'headers' => [
-						'requesttoken' => $this->getReqestToken(),
 						'OCS-APIREQUEST' => 'true',
 						'Accept' => 'application/json'
-					]
+					],
+					'auth' => $this->getAuth()
 				], $options)
 			);
 		} catch (ClientException $e) {

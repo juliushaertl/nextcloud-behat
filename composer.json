@@ -1,6 +1,5 @@
 {
     "name": "juliushaertl/nextcloud-behat",
-    "version": "0.2.0",
     "description": "Behat context helpers for Nextcloud integration tests",
     "type": "library",
     "require": {

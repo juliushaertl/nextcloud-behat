@@ -30,17 +30,25 @@ use Behat\Behat\Context\Context;
 use Behat\Behat\Context\Environment\InitializedContextEnvironment;
 use Behat\Behat\Hook\Scope\BeforeScenarioScope;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\BadResponseException;
+use Psr\Http\Message\ResponseInterface;
 use Sabre\DAV\Client as SabreClient;
 
 class FilesContext implements Context {
 
 	/** @var string */
 	private $davPath = "remote.php/webdav";
+
+	public const DAV_PATH_PUBLIC = 'public.php/webdav';
+
 	/** @var boolean */
 	private $usingOldDavPath = true;
 
 	/** @var ServerContext */
 	private $serverContext;
+
+	/** @var ResponseInterface */
+	private $response;
 
 	/** @BeforeScenario */
 	public function gatherContexts(BeforeScenarioScope $scope) {
@@ -55,7 +63,22 @@ class FilesContext implements Context {
 	public function userUploadsFileTo($user, $source, $destination) {
 		$this->serverContext->setCurrentUser($user);
 		$file = \GuzzleHttp\Psr7\stream_for(fopen($source, 'r'));
-		$this->makeDavRequest($user, "PUT", $destination, [], $file);
+		$this->response = $this->makeDavRequest($user, "PUT", $destination, [], $file);
+	}
+
+	/**
+	 * @Given User :user creates a folder :destination
+	 * @param string $user
+	 * @param string $destination
+	 */
+	public function userCreatedAFolder($user, $destination) {
+		try {
+			$destination = '/' . ltrim($destination, '/');
+			$this->response = $this->makeDavRequest($user, "MKCOL", $destination, []);
+		} catch (BadResponseException $e) {
+			// 4xx and 5xx responses cause an exception
+			$this->response = $e->getResponse();
+		}
 	}
 
 	public function getDavFilesPath($user) {
@@ -107,6 +130,20 @@ class FilesContext implements Context {
 			'baseUri' => $fullUrl,
 			'userName' => $this->serverContext->getAuth()[0],
 			'password' => $this->serverContext->getAuth()[1]
+		];
+
+		$settings['authType'] = SabreClient::AUTH_BASIC;
+
+		return new SabreClient($settings);
+	}
+
+	public function getPublicSabreClient($shareToken, $password = null) {
+		$fullUrl = $this->serverContext->getBaseUrl();
+
+		$settings = [
+			'baseUri' => $fullUrl . self::DAV_PATH_PUBLIC . '/',
+			'userName' => $shareToken,
+			'password' => $password
 		];
 
 		$settings['authType'] = SabreClient::AUTH_BASIC;

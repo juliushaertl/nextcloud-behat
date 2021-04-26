@@ -140,6 +140,13 @@ class ServerContext implements Context {
 	}
 
 	private function setUserDisplayName($user) {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('PUT', '/cloud/users/' . $user, [
+			'key' => 'displayname',
+			'value' => $user . '-displayname'
+		]);
+		$this->setCurrentUser($currentUser);
 	}
 
 	/**

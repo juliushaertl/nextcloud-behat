@@ -38,6 +38,8 @@ class SharingContext implements Context {
 	private $serverContext;
 	/** @var array */
 	private $lastShareData;
+	/** @var array */
+	private $storedShareData;
 
 	/** @BeforeScenario */
 	public function gatherContexts(BeforeScenarioScope $scope) {
@@ -52,6 +54,7 @@ class SharingContext implements Context {
 	 * @param TableNode $body
 	 */
 	public function asCreatingAShareWith($user, TableNode $body) {
+		$this->serverContext->setCurrentUser($user);
 		$fd = $body->getRowsHash();
 		if (array_key_exists('expireDate', $fd)) {
 			$dateModification = $fd['expireDate'];
@@ -101,5 +104,19 @@ class SharingContext implements Context {
 		$this->serverContext->sendOCSRequest('POST', "/apps/files_sharing/api/v1/remote_shares/pending/{$share_id}", null);
 		$this->serverContext->assertHttpStatusCode(200);
 		$this->serverContext->theOCSStatusCodeShouldBe(200);
+	}
+
+	/**
+	 * @When /^save the last share data as "([^"]*)"$/
+	 */
+	public function saveLastShareData($name) {
+		$this->storedShareData[$name] = $this->lastShareData;
+	}
+
+	/**
+	 * @When /^restore the last share data from "([^"]*)"$/
+	 */
+	public function restoreLastShareData($name) {
+		$this->lastShareData = $this->storedShareData[$name];
 	}
 }

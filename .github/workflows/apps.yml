@@ -1,0 +1,73 @@
+name: Test apps
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - stable*
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-versions: ['8.0']
+        databases: ['sqlite']
+        server-versions: ['master']
+        app-id: ['deck', 'richdocuments']
+
+    name: ${{ matrix.app-id }}php${{ matrix.php-versions }}-${{ matrix.databases }}-${{ matrix.server-versions }}
+
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v2
+        with:
+          repository: nextcloud/server
+          ref: ${{ matrix.server-versions }}
+
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          auth_header="$(git config --local --get http.https://github.com/.extraheader)"
+          git submodule sync --recursive
+          git -c "http.extraheader=$auth_header" -c protocol.version=2 submodule update --init --force --recursive --depth=1
+
+      - name: Checkout app
+        uses: actions/checkout@v2
+        with:
+          path: apps/${{ matrix.app-id }}
+
+      - name: Set up php ${{ matrix.php-versions }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-versions }}
+          tools: phpunit
+          extensions: mbstring, iconv, fileinfo, intl, sqlite, pdo_sqlite, mysql, pdo_mysql, pgsql, pdo_pgsql,
+          coverage: none
+
+      - name: Set up PHPUnit
+        working-directory: apps/${{ matrix.app-id }}
+        run: composer i
+
+      - name: Set up Nextcloud
+        run: |
+          mkdir data
+          ./occ maintenance:install --verbose --database=${{ matrix.databases }} --database-name=nextcloud --database-host=127.0.0.1 --database-port=$DB_PORT --database-user=root --database-pass=rootpassword --admin-user admin --admin-pass admin
+          cat config/config.php
+          ./occ user:list
+          ./occ app:enable --force ${{ matrix.app-id }}
+          PHP_CLI_SERVER_WORKERS=10 php -S localhost:8080 &
+
+      - name: Run behat
+        working-directory: apps/${{ matrix.app-id }}/tests/integration
+        if: ${{ matrix.app-id == 'deck' }}
+        run: ./run.sh
+
+      - name: Run behat
+        working-directory: apps/${{ matrix.app-id }}/tests
+        if: ${{ matrix.app-id == 'richdocuments' }}
+        run: ./run-integration.sh
+

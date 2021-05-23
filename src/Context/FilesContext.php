@@ -29,26 +29,23 @@ namespace JuliusHaertl\NextcloudBehat\Context;
 use Behat\Behat\Context\Context;
 use Behat\Behat\Context\Environment\InitializedContextEnvironment;
 use Behat\Behat\Hook\Scope\BeforeScenarioScope;
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\BadResponseException;
+use Exception;
+use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Exception\ServerException;
+use GuzzleHttp\Psr7\Utils;
 use Psr\Http\Message\ResponseInterface;
 use Sabre\DAV\Client as SabreClient;
 
 class FilesContext implements Context {
-
-	/** @var string */
-	private $davPath = "remote.php/webdav";
-
+	public const DAV_PATH_OLD = 'remote.php/webdav';
+	public const DAV_PATH_NEW = 'remote.php/dav';
 	public const DAV_PATH_PUBLIC = 'public.php/webdav';
 
 	/** @var boolean */
-	private $usingOldDavPath = true;
+	private $usingOldDavPath = false;
 
 	/** @var ServerContext */
 	private $serverContext;
-
-	/** @var ResponseInterface */
-	private $response;
 
 	/** @BeforeScenario */
 	public function gatherContexts(BeforeScenarioScope $scope) {
@@ -60,10 +57,11 @@ class FilesContext implements Context {
 	/**
 	 * @Given User :arg1 uploads file :arg2 to :arg3
 	 */
-	public function userUploadsFileTo($user, $source, $destination) {
+	public function userUploadsFileTo(string $user, string $source, string $destination): void {
 		$this->serverContext->setCurrentUser($user);
-		$file = \GuzzleHttp\Psr7\stream_for(fopen($source, 'r'));
-		$this->response = $this->makeDavRequest($user, "PUT", $destination, [], $file);
+		$this->serverContext->usingWebAsUser($user);
+		$file = Utils::streamFor(fopen($source, 'rb'));
+		$this->makeGuzzleDavRequest("PUT", $destination, null, $file);
 	}
 
 	/**
@@ -71,63 +69,93 @@ class FilesContext implements Context {
 	 * @param string $user
 	 * @param string $destination
 	 */
-	public function userCreatedAFolder($user, $destination) {
-		try {
-			$destination = '/' . ltrim($destination, '/');
-			$this->response = $this->makeDavRequest($user, "MKCOL", $destination, []);
-		} catch (BadResponseException $e) {
-			// 4xx and 5xx responses cause an exception
-			$this->response = $e->getResponse();
-		}
+	public function userCreatedAFolder(string $user, string $destination): void {
+		$this->serverContext->setCurrentUser($user);
+		$this->serverContext->usingWebAsUser($user);
+		$destination = '/' . ltrim($destination, '/');
+		$this->makeGuzzleDavRequest("MKCOL", $destination, []);
 	}
 
-	public function getDavFilesPath($user) {
-		if ($this->usingOldDavPath === true) {
-			return $this->davPath;
-		} else {
-			return $this->davPath . '/files/' . $user;
-		}
-	}
-
-	public function makeDavRequest($user, $method, $path, $headers, $body = null, $type = "files") {
-		if ($type === "files") {
-			$fullUrl = $this->serverContext->getBaseUrl() . $this->getDavFilesPath($user) . "$path";
-		} elseif ($type === "uploads") {
-			$fullUrl = $this->serverContext->getBaseUrl() . $this->davPath . "$path";
-		}
-		$client = new Client();
-		$options = [
-			'headers' => $headers,
-			'body' => $body
-		];
-		$options['auth'] = $this->serverContext->getAuth();
-		return $client->request($method, $fullUrl, $options);
-	}
-
-	public function makeSabrePath($user, $path, $type = 'files') {
-		if ($type === 'files') {
-			return $this->encodePath($this->getDavFilesPath($user) . $path);
-		} else {
-			return $this->encodePath($this->davPath . '/' . $type .  '/' . $user . '/' . $path);
+	/**
+	 * @Then /^as "([^"]*)" the (file|folder|entry) "([^"]*)" does not exist$/
+	 */
+	public function asTheFileOrFolderDoesNotExist(string $user, string $type, string $path): void {
+		$this->serverContext->setCurrentUser($user);
+		$client = $this->getSabreFilesClient();
+		$response = $client->request('HEAD', ltrim($path, '/'));
+		if ($response['statusCode'] !== 404) {
+			throw new Exception($type . ' "' . $path . '" expected to not exist (status code ' . $response['statusCode'] . ', expected 404)');
 		}
 	}
 
 	/**
-	 * URL encodes the given path but keeps the slashes
-	 *
-	 * @param string $path to encode
-	 * @return string encoded path
+	 * @Then /^as "([^"]*)" the (file|folder|entry) "([^"]*)" exists$/
+	 * @param string $user
+	 * @param string $type
+	 * @param string $path
 	 */
-	private function encodePath($path) {
-		// slashes need to stay
-		return str_replace('%2F', '/', rawurlencode($path));
+	public function asTheFileOrFolderExists(string $user, string $type, string $path): void {
+		$this->serverContext->setCurrentUser($user);
+		$sabreResponse = $this->listFolder($path, 0);
 	}
 
-	public function getSabreClient($user) {
-		$fullUrl = $this->serverContext->getBaseUrl();
+	/**
+	 * @Given User :user deletes file :path
+	 */
+	public function userDeletesFile(string $user, string $path): void {
+		$this->serverContext->setCurrentUser($user);
+		$this->serverContext->usingWebAsUser($user);
+		$this->makeGuzzleDavRequest('DELETE', $path, []);
+	}
 
+	/**
+	 * Returns the elements of a propfind, $folderDepth requires 1 to see elements without children
+	 */
+	public function listFolder($path, $folderDepth, $properties = null): array {
+		$client = $this->getSabreFilesClient();
+		if (!$properties) {
+			$properties = [
+				'{DAV:}getetag'
+			];
+		}
+		return $client->propfind(ltrim($path, '/'), $properties, $folderDepth);
+	}
+
+	private function getDavFilesPath($user) {
+		if ($this->usingOldDavPath === true) {
+			return self::DAV_PATH_OLD . '/';
+		}
+		return self::DAV_PATH_NEW . '/files/' . $user . '/';
+	}
+
+	public function makeGuzzleDavRequest($method, $path, $headers = null, $body = null, $type = "files"): ResponseInterface {
+		$fullUrl = $this->generateDavPath($type, ltrim($path, '/'));
+		$options = array_filter([
+			'headers' => $headers,
+			'body' => $body,
+			'auth' => $this->serverContext->getAuth()
+		], static function ($e) {
+			return $e !== null;
+		});
+		try {
+			return $this->serverContext->sendRawRequest($method, $fullUrl, $options);
+		} catch (ServerException | ClientException $e) {
+			return $e->getResponse();
+		}
+	}
+
+	public function getSabreFilesClient(): SabreClient {
+		return $this->getSabreClient(null, $this->getDavFilesPath($this->serverContext->getCurrentUser()));
+	}
+
+	/** @depreacted Use getSabreFilesClient */
+	public function getSabreClient(string $user = null, string $path = '/'): SabreClient {
+		if ($user) {
+			$this->serverContext->setCurrentUser($user);
+		}
+		$baseUrl = rtrim($this->serverContext->getBaseUrl() . $path, '/') . '/';
 		$settings = [
-			'baseUri' => $fullUrl,
+			'baseUri' => $baseUrl,
 			'userName' => $this->serverContext->getAuth()[0],
 			'password' => $this->serverContext->getAuth()[1]
 		];
@@ -137,11 +165,11 @@ class FilesContext implements Context {
 		return new SabreClient($settings);
 	}
 
-	public function getPublicSabreClient($shareToken, $password = null) {
-		$fullUrl = $this->serverContext->getBaseUrl();
+	public function getPublicSabreClient($shareToken, $password = null): SabreClient {
+		$serverUrl = $this->serverContext->getBaseUrl();
 
 		$settings = [
-			'baseUri' => $fullUrl . self::DAV_PATH_PUBLIC . '/',
+			'baseUri' => $serverUrl . self::DAV_PATH_PUBLIC . '/',
 			'userName' => $shareToken,
 			'password' => $password
 		];
@@ -149,5 +177,26 @@ class FilesContext implements Context {
 		$settings['authType'] = SabreClient::AUTH_BASIC;
 
 		return new SabreClient($settings);
+	}
+
+	public function generateDavPath($type = 'files', $path = '/'): string {
+		return $this->makeSabrePath($this->serverContext->getCurrentUser(), $path, $type);
+	}
+
+	/** @depreacted use generateDavPath */
+	public function makeSabrePath($user, $path = '/', $type = 'files'): string {
+		if ($type === 'files') {
+			// Just needed as a fallback for the old dav path
+			return $this->encodePath($this->getDavFilesPath($user) . $path);
+		}
+		return $this->encodePath(self::DAV_PATH_NEW . '/' . $type .  '/' . $user . '/' . ltrim($path, '/'));
+	}
+
+	/**
+	 * URL encodes the given path but keeps the slashes
+	 */
+	private function encodePath(string $path): string {
+		// slashes need to stay
+		return str_replace('%2F', '/', rawurlencode($path));
 	}
 }

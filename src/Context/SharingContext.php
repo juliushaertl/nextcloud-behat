@@ -41,8 +41,10 @@ class SharingContext implements Context {
 	/** @var array */
 	private $storedShareData;
 
+	private $sharingAPIVersion = '1';
+
 	/** @BeforeScenario */
-	public function gatherContexts(BeforeScenarioScope $scope) {
+	public function gatherContexts(BeforeScenarioScope $scope): void {
 		/** @var InitializedContextEnvironment $environment */
 		$environment = $scope->getEnvironment();
 		$this->serverContext = $environment->getContext(ServerContext::class);
@@ -50,58 +52,62 @@ class SharingContext implements Context {
 
 	/**
 	 * @Given /^as "([^"]*)" create a share with$/
-	 * @param string $user
-	 * @param TableNode $body
 	 */
-	public function asCreatingAShareWith($user, TableNode $body) {
+	public function asCreatingAShareWith(string $user, TableNode $body): void {
 		$this->serverContext->setCurrentUser($user);
+		$this->createAShareWith($body);
+		$this->serverContext->assertHttpStatusCode(200, 'Failed to create the share: ' . PHP_EOL . json_encode($this->serverContext->getOCSResponse()));
+		$this->lastShareData = $this->serverContext->getOCSResponseData();
+	}
+
+	/**
+	 * @Given creating a share with
+	 */
+	public function createAShareWith(TableNode $body): void {
 		$fd = $body->getRowsHash();
 		if (array_key_exists('expireDate', $fd)) {
 			$dateModification = $fd['expireDate'];
 			$fd['expireDate'] = date('Y-m-d', strtotime($dateModification));
 		}
-
-		$this->serverContext->sendOCSRequest('POST', "/apps/files_sharing/api/v1/shares", $fd);
-		$this->serverContext->assertHttpStatusCode(200, 'Failed to create the share: ' . PHP_EOL . json_encode($this->serverContext->getOCSResponse()));
-
-		$this->lastShareData = $this->serverContext->getOCSResponseData();
+		$this->serverContext->sendOCSRequest('POST', $this->sharingApiUrl("shares"), $fd);
+		if ($this->serverContext->getResponse()->getStatusCode() === 200) {
+			$this->lastShareData = $this->serverContext->getOCSResponseData();
+		}
 	}
 
 	/**
 	 * @When /^Updating last share with$/
 	 */
-	public function updatingLastShare(TableNode $body) {
-		$share_id = (string) $this->lastShareData['id'];
+	public function updatingLastShare(TableNode $body): void {
+		$shareId = (string)$this->lastShareData['id'];
 		$fd = $body->getRowsHash();
 		if (array_key_exists('expireDate', $fd)) {
 			$dateModification = $fd['expireDate'];
 			$fd['expireDate'] = date('Y-m-d', strtotime($dateModification));
 		}
 
-		$this->serverContext->sendOCSRequest('PUT', "/apps/files_sharing/api/v1/shares/${share_id}", $fd);
+		$this->serverContext->sendOCSRequest('PUT', $this->sharingApiUrl("shares/$shareId"), $fd);
 		$this->serverContext->assertHttpStatusCode(200, 'Failed to update the share: ' . PHP_EOL . json_encode($this->serverContext->getOCSResponse()));
 
 		$this->lastShareData = $this->serverContext->getOCSResponseData();
 	}
 
-	public function getLastShareData() {
+	public function getLastShareData(): array {
 		return $this->lastShareData;
 	}
 
 	/**
 	 * @When /^user "([^"]*)" accepts last share$/
-	 * @param string $user
-	 * @param string $server
 	 */
-	public function acceptLastPendingShare($user) {
+	public function acceptLastPendingShare(string $user): void {
 		$this->serverContext->setCurrentUser($user);
-		$this->serverContext->sendOCSRequest('GET', "/apps/files_sharing/api/v1/remote_shares/pending", null);
+		$this->serverContext->sendOCSRequest('GET', $this->sharingApiUrl("remote_shares/pending"), null);
 		$this->serverContext->assertHttpStatusCode(200);
 		$this->serverContext->theOCSStatusCodeShouldBe(200);
 		$response = $this->serverContext->getOCSResponseData();
 		Assert::assertNotEmpty($response, 'No pending share found');
-		$share_id = $response[0]['id'];
-		$this->serverContext->sendOCSRequest('POST', "/apps/files_sharing/api/v1/remote_shares/pending/{$share_id}", null);
+		$shareId = $response[0]['id'];
+		$this->serverContext->sendOCSRequest('POST', $this->sharingApiUrl("remote_shares/pending/$shareId"), null);
 		$this->serverContext->assertHttpStatusCode(200);
 		$this->serverContext->theOCSStatusCodeShouldBe(200);
 	}
@@ -109,14 +115,26 @@ class SharingContext implements Context {
 	/**
 	 * @When /^save the last share data as "([^"]*)"$/
 	 */
-	public function saveLastShareData($name) {
+	public function saveLastShareData($name): void {
 		$this->storedShareData[$name] = $this->lastShareData;
 	}
 
 	/**
 	 * @When /^restore the last share data from "([^"]*)"$/
 	 */
-	public function restoreLastShareData($name) {
+	public function restoreLastShareData($name): void {
 		$this->lastShareData = $this->storedShareData[$name];
+	}
+
+	/**
+	 * @When deleting last share
+	 */
+	public function deletingLastShare(): void {
+		$shareId = $this->lastShareData['id'];
+		$this->serverContext->sendOCSRequest("DELETE", $this->sharingApiUrl("/shares/$shareId"), null);
+	}
+
+	private function sharingApiUrl(string $endpoint): string {
+		return sprintf("/apps/files_sharing/api/v%s/", $this->sharingAPIVersion) . ltrim($endpoint, '/');
 	}
 }

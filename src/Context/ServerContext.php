@@ -31,70 +31,100 @@ use Behat\Gherkin\Node\TableNode;
 use GuzzleHttp\Client;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Exception\ClientException;
-use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\ServerException;
 use InvalidArgumentException;
 use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
 class ServerContext implements Context {
-	public const TEST_ADMIN_PASSWORD = 'password';
+	public const TEST_ADMIN_PASSWORD = 'admin';
 	public const TEST_PASSWORD = '123456';
 
 	private $servers;
 	private $baseUrl;
+	private $anonymousUser = false;
 	private $currentUser;
 	private $currentUserPassword;
 
 	private $createdUsers = [];
+	private $createdGroups = [];
 
 	private $response;
 
-	private $cookieJar;
+	private $cookieJars = [];
 	private $requestToken = '';
+	private $cookieJarAnonymous;
 
 	public function __construct($servers) {
 		$this->servers = $servers;
 		$this->baseUrl = $servers['default'];
-		$this->cookieJar = new CookieJar();
 		$this->setCurrentUser('admin');
+		$this->cookieJarAnonymous = new CookieJar();
 	}
 
 	/**
 	 * @AfterScenario
 	 */
-	public function tearDown() {
+	public function tearDown(): void {
 		foreach ($this->createdUsers as $uid => $state) {
-			$this->deleteUser($uid);
+			if ($uid !== 'admin') {
+				$this->deleteUser($uid);
+			}
+		}
+		foreach ($this->createdGroups as $gid => $state) {
+			$this->deleteGroup($gid);
 		}
 	}
 
-	private function deleteUser($user) {
+	private function deleteUser($user): void {
 		$currentUser = $this->currentUser;
 		$this->setCurrentUser('admin');
 		$this->sendOCSRequest('DELETE', '/cloud/users/' . $user);
 		$this->setCurrentUser($currentUser);
 		unset($this->createdUsers[$user]);
-		return $this->response;
 	}
 
 	/**
 	 * @Given /^on instance "([^"]*)"$/
 	 */
-	public function onInstance($arg1) {
+	public function onInstance($arg1): void {
 		$this->baseUrl = $this->servers[$arg1];
 	}
 
-	public function getServer($server) {
+	public function getServer($server): string {
 		return $this->servers[$server];
 	}
 
 	/**
-	 * @Given /^as user "([^"]*)"$/
-	 * @param string $user
+	 * @Given acting as user :user
 	 */
-	public function setCurrentUser($user) {
+	public function actingAsUser($user) {
+		$this->usingWebAsUser($user);
+	}
+
+	/**
+	 * @Given /^as user "([^"]*)"$/
+	 */
+	public function setCurrentUser(string $user): void {
+		$this->anonymousUser = false;
 		$this->currentUser = $user;
 		$this->currentUserPassword = $user === 'admin' ? self::TEST_ADMIN_PASSWORD : self::TEST_PASSWORD;
+	}
+
+	public function getCurrentUser(): string {
+		return $this->currentUser;
+	}
+
+	public function actAsAdmin(callable $callback): void {
+		$this->actAsUser('admin', $callback);
+	}
+
+	public function actAsUser($userId, callable $callback): void {
+		$lastUser = $this->getCurrentUser();
+		$this->setCurrentUser($userId);
+		$callback();
+		$this->setCurrentUser($lastUser);
 	}
 
 	public function getBaseUrl(): string {
@@ -109,56 +139,67 @@ class ServerContext implements Context {
 	 * @Given /^user "([^"]*)" exists$/
 	 * @param string $user
 	 */
-	public function assureUserExists($user) {
+	public function assureUserExists(string $user): void {
 		$this->userExists($user);
+		$this->createdUsers[$user] = true;
 		if ($this->response->getStatusCode() !== 200) {
 			$this->createUser($user);
-			$this->setUserDisplayName($user);
 		}
-		$this->createdUsers[$user] = true;
 	}
 
-	private function userExists($user) {
+	private function userExists($user): void {
 		$this->sendOCSRequest('GET', '/cloud/users/' . $user);
 	}
 
-	private function createUser($user) {
-		$currentUser = $this->currentUser;
-		$this->setCurrentUser('admin');
-		$this->sendOCSRequest('POST', '/cloud/users', [
-			'userid' => $user,
-			'password' => self::TEST_PASSWORD,
-		]);
-		$this->assertHttpStatusCode(200, 'Failed to create user');
+	private function createUser(string $user, string $displayName = null): void {
+		$this->actAsAdmin(function () use ($user, $displayName) {
+			$this->sendOCSRequest('POST', '/cloud/users', [
+				'userid' => $user,
+				'displayName' => $displayName ?? ($user . '-displayname'),
+				'password' => self::TEST_PASSWORD,
+			]);
+			$this->assertHttpStatusCode(200, 'Failed to create user');
+			$this->createdUsers[$user] = true;
 
-		//Quick hack to login once with the current user
-		$this->setCurrentUser($user);
-		$this->sendOCSRequest('GET', '/cloud/users' . '/' . $user);
-		$this->assertHttpStatusCode(200, 'Failed to do first login');
-
-		$this->setCurrentUser($currentUser);
+			//Quick hack to login once with the current user
+			$this->setCurrentUser($user);
+			$this->sendOCSRequest('GET', '/cloud/users' . '/' . $user);
+			$this->assertHttpStatusCode(200, 'Failed to do first login');
+		});
 	}
 
-	private function setUserDisplayName($user) {
-		$currentUser = $this->currentUser;
-		$this->setCurrentUser('admin');
-		$this->sendOCSRequest('PUT', '/cloud/users/' . $user, [
-			'key' => 'displayname',
-			'value' => $user . '-displayname'
-		]);
-		$this->setCurrentUser($currentUser);
+	/**
+	 * @Given user :userId with displayname :displayName exists
+	 */
+	public function userWithDisplaynameExists(string $userId, string $displayName): void {
+		$this->userExists($userId);
+		if ($this->response->getStatusCode() !== 200) {
+			$this->createUser($userId, $displayName);
+		}
+	}
+
+	private function setUserDisplayName(string $userId, string $displayName = null): void {
+		$this->actAsAdmin(function () use ($userId, $displayName) {
+			$this->sendOCSRequest('PUT', '/cloud/users/' . $userId, [
+				'key' => 'displayname',
+				'value' => $displayName ?? ($userId . '-displayname')
+			]);
+		});
 	}
 
 	/**
 	 * @Given Using web as user :user
-	 * @param string $user
 	 */
-	public function usingWebAsUser($user = null) {
-		$this->cookieJar = new CookieJar();
+	public function usingWebAsUser(string $user = null): void {
 		if ($user === null) {
+			$this->anonymousUser = true;
 			return;
 		}
 		$this->setCurrentUser($user);
+		if (isset($this->cookieJars[$user])) {
+			// Breaking change Add method to get new token
+			// return;
+		}
 
 		$loginUrl = $this->getBaseUrl() . 'index.php/login';
 		// Request a new session and extract CSRF token
@@ -166,14 +207,10 @@ class ServerContext implements Context {
 		$response = $client->get(
 			$loginUrl,
 			[
-				'cookies' => $this->cookieJar,
+				'cookies' => $this->getCookieJar(),
 			]
 		);
 		$this->extractRequestTokenFromResponse($response);
-
-		if ($user === null) {
-			return;
-		}
 
 		// Login and extract new token
 		$client = new Client();
@@ -185,7 +222,7 @@ class ServerContext implements Context {
 					'password' => $this->currentUserPassword,
 					'requesttoken' => $this->requestToken,
 				],
-				'cookies' => $this->cookieJar,
+				'cookies' => $this->getCookieJar(),
 			]
 		);
 		$this->extractRequestTokenFromResponse($response);
@@ -193,35 +230,61 @@ class ServerContext implements Context {
 
 	/**
 	 * @Given Using web as guest
-	 * @param string $user
 	 */
-	public function usingWebasGuest() {
-		return $this->usingWebAsUser(null);
+	public function usingWebasGuest(): void {
+		$this->anonymousUser = true;
 	}
 
-	private function extractRequestTokenFromResponse(ResponseInterface $response) {
+	private function extractRequestTokenFromResponse(ResponseInterface $response): void {
 		$this->requestToken = substr(preg_replace('/(.*)data-requesttoken="(.*)">(.*)/sm', '\2', $response->getBody()->getContents()), 0, 89);
 	}
 
-	public function getWebOptions() {
-		$options = [
-			'cookies' => $this->cookieJar,
+	public function getWebOptions(): array {
+		return [
+			'cookies' => $this->getCookieJar(),
 			'headers' => [
 				'requesttoken' => $this->requestToken,
 			]
 		];
-		return $options;
 	}
 
 	public function getCookieJar(): CookieJar {
-		return $this->cookieJar;
+		if ($this->anonymousUser) {
+			return $this->cookieJarAnonymous;
+		}
+		if (!isset($this->cookieJars[$this->getCurrentUser()])) {
+			$this->cookieJars[$this->getCurrentUser()] = new CookieJar();
+			$this->usingWebAsUser($this->getCurrentUser());
+		}
+		return $this->cookieJars[$this->getCurrentUser()];
 	}
 
-	public function getReqestToken(): string {
+	public function getRequestToken(): string {
 		return $this->requestToken;
 	}
 
-	public function sendJSONrequest($method, $url, $data = []) {
+	/**
+	 * @throws GuzzleException
+	 */
+	public function sendRawRequest($method, $url, $options = [], $data = null): ResponseInterface {
+		$client = new Client;
+		try {
+			$this->response = $client->request(
+				$method,
+				$this->getBaseUrl() . ltrim($url, '/'),
+				array_merge([
+					'auth' => $this->getAuth(),
+					'json' => $data,
+				], $options)
+			);
+		} catch (ClientException | ServerException $e) {
+			$this->response = $e->getResponse();
+			throw $e;
+		}
+		return $this->response;
+	}
+
+	public function sendJSONRequest($method, $url, $data = []): void {
 		$client = new Client;
 		try {
 			$this->response = $client->request(
@@ -231,16 +294,16 @@ class ServerContext implements Context {
 					'cookies' => $this->getCookieJar(),
 					'json' => $data,
 					'headers' => [
-						'requesttoken' => $this->getReqestToken(),
+						'requesttoken' => $this->getRequestToken(),
 					]
 				]
 			);
-		} catch (ClientException $e) {
+		} catch (ClientException | ServerException $e) {
 			$this->response = $e->getResponse();
 		}
 	}
 
-	public function sendOCSRequest($method, $url, $data = [], $options = []) {
+	public function sendOCSRequest($method, $url, $data = [], $options = []): void {
 		$client = new Client;
 		try {
 			$this->response = $client->request(
@@ -255,7 +318,7 @@ class ServerContext implements Context {
 					'auth' => $this->getAuth()
 				], $options)
 			);
-		} catch (ClientException $e) {
+		} catch (ClientException | ServerException $e) {
 			$this->response = $e->getResponse();
 		}
 	}
@@ -267,9 +330,9 @@ class ServerContext implements Context {
 	/**
 	 * @return array
 	 */
-	public function getOCSResponse() {
+	public function getOCSResponse(): array {
 		$this->response->getBody()->seek(0);
-		return json_decode($this->response->getBody()->getContents(), true);
+		return json_decode($this->response->getBody()->getContents(), true, 512, JSON_THROW_ON_ERROR);
 	}
 
 	public function getOCSResponseData() {
@@ -280,23 +343,25 @@ class ServerContext implements Context {
 	 * @Then /^the OCS status code should be "([^"]*)"$/
 	 * @param int $statusCode
 	 */
-	public function theOCSStatusCodeShouldBe($statusCode) {
+	public function theOCSStatusCodeShouldBe($statusCode): void {
 		Assert::assertEquals($statusCode, $this->getOCSResponse()['ocs']['meta']['statuscode']);
 	}
 
 	/**
-	 * @Then /^the HTTP status code should be "([^"]*)"$/
+	 * @Then the HTTP status code should be :statusCode
 	 * @param int $statusCode
 	 */
-	public function assertHttpStatusCode($statusCode, $message = '') {
+	public function assertHttpStatusCode(int $statusCode, string $message = ''): void {
 		Assert::assertEquals($statusCode, $this->response->getStatusCode(), $message);
 	}
 
 	/**
+	 * @Then the HTTP Content-Type should be :statusCode
+	 * @Then the response Content-Type should be :arg1
 	 * @Then /^the Content-Type should be "([^"]*)"$/
 	 * @param string $contentType
 	 */
-	public function theContentTypeShouldbe($contentType) {
+	public function assertHttpContentType($contentType): void {
 		Assert::assertEquals($contentType, $this->response->getHeader('Content-Type')[0]);
 	}
 
@@ -305,7 +370,7 @@ class ServerContext implements Context {
 	 * @param TableNode $table
 	 * @throws InvalidArgumentException
 	 */
-	public function theResponseShouldBeAJsonArrayWithTheFollowingMandatoryValues(TableNode $table) {
+	public function theResponseShouldBeAJsonArrayWithTheFollowingMandatoryValues(TableNode $table): void {
 		$this->response->getBody()->seek(0);
 		$expectedValues = $table->getColumnsHash();
 		$realResponseArray = json_decode($this->response->getBody()->getContents(), true);
@@ -328,7 +393,7 @@ class ServerContext implements Context {
 	 * @param int $length
 	 * @throws InvalidArgumentException
 	 */
-	public function theResponseShouldBeAJsonArrayWithALengthOf($length) {
+	public function theResponseShouldBeAJsonArrayWithALengthOf($length): void {
 		$this->response->getBody()->seek(0);
 		$realResponseArray = json_decode($this->response->getBody()->getContents(), true);
 		if (count($realResponseArray) !== (int)$length) {
@@ -340,5 +405,75 @@ class ServerContext implements Context {
 				)
 			);
 		}
+	}
+
+
+	/**
+	 * @Given /^group "([^"]*)" exists$/
+	 * @param string $group
+	 */
+	public function assureGroupExists(string $group): void {
+		$response = $this->groupExists($group);
+		if ($response->getStatusCode() !== 200) {
+			$this->createGroup($group);
+			$this->groupExists($group);
+			$this->assertHttpStatusCode(200);
+		}
+	}
+
+	private function groupExists(string $group): ResponseInterface {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('GET', '/cloud/groups/' . $group);
+		$this->setCurrentUser($currentUser);
+		return $this->response;
+	}
+
+	private function createGroup($group): void {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('POST', '/cloud/groups', [
+			'groupid' => $group,
+		]);
+		$this->setCurrentUser($currentUser);
+
+		$this->createdGroups[] = $group;
+	}
+
+	private function deleteGroup($group): void {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('DELETE', '/cloud/groups/' . $group);
+		$this->setCurrentUser($currentUser);
+
+		unset($this->createdGroups[array_search($group, $this->createdGroups, true)]);
+	}
+
+	/**
+	 * @When /^user "([^"]*)" is member of group "([^"]*)"$/
+	 * @Given user :userId belongs to group :group
+	 */
+	public function addingUserToGroup(string $userId, string $group): void {
+		$this->actAsAdmin(function () use ($userId, $group) {
+			$this->sendOCSRequest('POST', "/cloud/users/$userId/groups", [
+				'groupid' => $group,
+			]);
+			$this->assertHttpStatusCode(200);
+		});
+	}
+
+	/**
+	 * @When /^user "([^"]*)" is not member of group "([^"]*)"$/
+	 * @param string $user
+	 * @param string $group
+	 */
+	public function removeUserFromGroup(string $user, string $group): void {
+		$currentUser = $this->currentUser;
+		$this->setCurrentUser('admin');
+		$this->sendOCSRequest('DELETE', "/cloud/users/$user/groups", [
+			'groupid' => $group,
+		]);
+		$this->assertHttpStatusCode(200);
+		$this->setCurrentUser($currentUser);
 	}
 }

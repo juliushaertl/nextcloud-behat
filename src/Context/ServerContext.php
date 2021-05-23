@@ -38,7 +38,7 @@ use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
 class ServerContext implements Context {
-	public const TEST_ADMIN_PASSWORD = 'admin';
+	public const TEST_ADMIN_PASSWORD = 'password';
 	public const TEST_PASSWORD = '123456';
 
 	private $servers;

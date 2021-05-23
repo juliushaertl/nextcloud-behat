@@ -19,7 +19,7 @@ jobs:
         server-versions: ['master']
         app-id: ['deck', 'richdocuments']
 
-    name: ${{ matrix.app-id }}php${{ matrix.php-versions }}-${{ matrix.databases }}-${{ matrix.server-versions }}
+    name: ${{ matrix.app-id }}-php${{ matrix.php-versions }}-${{ matrix.databases }}-${{ matrix.server-versions }}
 
     steps:
       - name: Checkout server
@@ -38,6 +38,7 @@ jobs:
       - name: Checkout app
         uses: actions/checkout@v2
         with:
+          repository: nextcloud/${{ matrix.app-id }}
           path: apps/${{ matrix.app-id }}
 
       - name: Set up php ${{ matrix.php-versions }}

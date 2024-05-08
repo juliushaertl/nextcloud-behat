@@ -193,6 +193,16 @@ class ServerContext implements Context {
 	public function usingWebAsUser(string $user = null): void {
 		if ($user === null) {
 			$this->anonymousUser = true;
+			$loginUrl = $this->getBaseUrl() . 'index.php/login';
+			// Request a new session and extract CSRF token
+			$client = new Client();
+			$response = $client->get(
+				$loginUrl,
+				[
+					'cookies' => $this->getCookieJar(),
+				]
+			);
+			$this->extractRequestTokenFromResponse($response);
 			return;
 		}
 		$this->setCurrentUser($user);
